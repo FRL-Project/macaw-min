@@ -1,0 +1,8 @@
+{
+    "env": "metaworld",
+    "total_tasks": 1,
+    "train_tasks": [0],
+    "test_tasks": [0],
+    "train_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5",
+    "test_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5"
+}
