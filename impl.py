@@ -76,8 +76,15 @@ def build_networks_and_buffers(args, env, task_config):
         w_linear=args.weight_transform,
     ).to(args.device)
 
+    train_buffers = read_buffers(action_dim, args, obs_dim, task_config.train_tasks, task_config.train_buffer_paths)
+    test_buffers = read_buffers(action_dim, args, obs_dim, task_config.test_tasks, task_config.test_buffer_paths)
+
+    return policy, vf, train_buffers, test_buffers
+
+
+def read_buffers(action_dim, args, obs_dim, task_numbers, buffer_paths):
     buffer_paths = [
-        task_config.train_buffer_paths.format(idx) for idx in task_config.train_tasks
+        buffer_paths.format(idx) for idx in task_numbers
     ]
 
     buffers = [
@@ -89,10 +96,10 @@ def build_networks_and_buffers(args, env, task_config):
             immutable=True,
             load_from=buffer_paths[i],
         )
-        for i, task in enumerate(task_config.train_tasks)
+        for i, task in enumerate(task_numbers)
     ]
 
-    return policy, vf, buffers
+    return buffers
 
 
 def get_env(args, task_config):
@@ -145,7 +152,7 @@ def run(args):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
-    policy, vf, task_buffers = build_networks_and_buffers(args, env, task_config)
+    policy, vf, task_buffers, test_buffers = build_networks_and_buffers(args, env, task_config)
     policy_opt, vf_opt, policy_lrs, vf_lrs = get_opts_and_lrs(args, policy, vf)
 
     for train_step_idx in count(start=1):
