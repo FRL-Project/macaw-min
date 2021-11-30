@@ -1,19 +1,22 @@
+import copy
 import json
-import pickle
 from collections import namedtuple
 from itertools import count
-import random
-from typing import List
+from typing import List, Optional
 
 import higher
 import hydra
+import metaworld
 import numpy as np
 import torch
 import torch.distributions as D
 import torch.optim as O
+from garage.envs import MetaWorldSetTaskEnv
+from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
+from garage.experiment.deterministic import set_seed, get_seed
+from garage.sampler import RaySampler, WorkerFactory, DefaultWorker
 from hydra.utils import get_original_cwd
 
-from envs import HalfCheetahDirEnv, MetaworldEnv
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
@@ -102,26 +105,6 @@ def read_buffers(action_dim, args, obs_dim, task_numbers, buffer_paths):
     return buffers
 
 
-def get_env(args, task_config):
-    if task_config.env != 'metaworld':
-        tasks = []
-        for task_idx in range(task_config.total_tasks):
-            with open(task_config.task_paths.format(task_idx), "rb") as f:
-                task_info = pickle.load(f)
-                assert len(task_info) == 1, f"Unexpected task info: {task_info}"
-                tasks.append(task_info[0])
-
-    if args.advantage_head_coef == 0:
-        args.advantage_head_coef = None
-
-    if task_config.env == 'cheetah_dir':
-        env = HalfCheetahDirEnv(tasks, include_goal=args.include_goal or args.multitask)
-    elif task_config.env == 'metaworld':
-        env = MetaworldEnv(include_goal=args.include_goal)
-
-    return env
-
-
 def get_opts_and_lrs(args, policy, vf):
     policy_opt = O.Adam(policy.parameters(), lr=args.outer_policy_lr)
     vf_opt = O.Adam(vf.parameters(), lr=args.outer_value_lr)
@@ -137,6 +120,27 @@ def get_opts_and_lrs(args, policy, vf):
     return policy_opt, vf_opt, policy_lrs, vf_lrs
 
 
+def get_metaworld_env(env_name: str = 'ml10', env_ml1_name: str = ''):
+    if env_name == 'ml1':
+        ml = metaworld.ML1(env_name=env_ml1_name)
+    elif env_name == 'ml10':
+        ml = metaworld.ML10()
+    elif env_name == 'ml45':
+        ml = metaworld.ML45()
+    else:
+        raise NotImplementedError()
+
+    train_sampler = MetaWorldTaskSampler(ml, 'train')
+    env_specs = train_sampler.sample(1)[0]()  # sample one task instance to get environment specs
+
+    test_sampler = SetTaskSampler(
+        MetaWorldSetTaskEnv,
+        env=MetaWorldSetTaskEnv(ml, 'test'),
+    )
+
+    return env_specs, train_sampler, test_sampler
+
+
 @hydra.main(config_path="config", config_name="config.yaml")
 def run(args):
     with open(f"{get_original_cwd()}/{args.task_config}", "r") as f:
@@ -144,15 +148,19 @@ def run(args):
             f, object_hook=lambda d: namedtuple("X", d.keys())(*d.values())
         )
 
-    env = get_env(args, task_config)
+    if args.advantage_head_coef == 0:
+        args.advantage_head_coef = None
+
+    # env = MetaworldEnv(include_goal=args.include_goal)
 
     seed = args.seed if args.seed is not None else 1
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
 
-    policy, vf, task_buffers, test_buffers = build_networks_and_buffers(args, env, task_config)
+    set_seed(seed)  # set seed directly before we get envs
+    env_specs, train_task_sampler, test_task_sampler = get_metaworld_env(env_name=task_config.env,
+                                                                         env_ml1_name=task_config.env_ml1_name if hasattr(task_config,
+                                                                                                                          'env_ml1_name') else '')
+
+    policy, vf, task_buffers, test_buffers = build_networks_and_buffers(args, env_specs, task_config)
     policy_opt, vf_opt, policy_lrs, vf_lrs = get_opts_and_lrs(args, policy, vf)
 
     for train_step_idx in count(start=1):
@@ -201,11 +209,50 @@ def run(args):
                 (meta_policy_loss / len(task_config.train_tasks)).backward()
 
                 # Sample adapted policy trajectory, add to replay buffer i [L12]
-                if train_step_idx % args.rollout_interval == 0:
-                    adapted_trajectory, adapted_reward, success = rollout_policy(
-                        f_policy, env
-                    )
-                    print("train_step", train_step_idx, " rewards", adapted_reward, " success", success)
+                # if train_step_idx % args.rollout_interval == 0:
+                #     adapted_trajectory, adapted_reward, success = rollout_policy(
+                #         f_policy, env
+                #     )
+                #     print("train_step", train_step_idx, " rewards", adapted_reward, " success", success)
+
+        # evaluation on test set
+        n_exploration_eps = 10
+        eval_policy = copy.deepcopy(policy)
+
+        env_instances = test_task_sampler.sample(test_task_sampler.n_tasks)
+        env = env_instances[0]()
+        max_episode_length = env.spec.max_episode_length
+        test_episode_sampler = RaySampler.from_worker_factory(
+            WorkerFactory(seed=get_seed(),
+                          max_episode_length=max_episode_length,
+                          n_workers=n_exploration_eps,
+                          worker_class=DefaultWorker,
+                          worker_args={}),
+            agents=eval_policy,
+            envs=env)
+
+        for env_instance in env_instances:
+            # reset policy and value function
+            eval_policy = copy.deepcopy(policy)
+            eval_value_function = copy.deepcopy(vf)
+            # offline update of value function and policy
+            env_name = env_instance._task['inner'].env_name
+
+            # TODO map env_name to test buffer index
+            env_idx = 0
+            test_buffer = test_buffers[env_idx]
+
+            value_batch, value_batch_dict = test_buffer.sample(args.eval_batch_size, return_both=True)
+            value_batch = torch.tensor(value_batch, requires_grad=False).to(args.device)
+            policy_batch, policy_batch_dict = value_batch, value_batch_dict
+
+            # TODO update policy and value function
+
+            # obtain episodes on the current task instance
+            adapted_eps = test_episode_sampler.obtain_samples(0, max_episode_length * n_exploration_eps, eval_policy, env_instance)
+
+            # TODO log rewards and so on
+
 
 
 if __name__ == "__main__":
