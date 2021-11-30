@@ -1,11 +1,12 @@
+from typing import List, Callable, Optional
+
 import torch
 import torch.nn as nn
-from typing import List, Callable, Optional
 
 
 class WLinear(nn.Module):
     def __init__(
-        self, in_features: int, out_features: int, bias_size: Optional[int] = None
+            self, in_features: int, out_features: int, bias_size: Optional[int] = None
     ):
         super().__init__()
 
@@ -28,18 +29,36 @@ class WLinear(nn.Module):
     def forward(self, x: torch.tensor):
         theta = self.fc(self.z)
         w = theta[: self.w_idx].view(x.shape[-1], -1)
-        b = theta[self.w_idx :]
+        b = theta[self.w_idx:]
         return x @ w + b
+
+
+class BiasLinear(nn.Module):
+    def __init__(self, in_features: int, out_features: int, bias_size: Optional[int] = None):
+        super().__init__()
+        if bias_size is None:
+            bias_size = out_features
+
+        self._linear = nn.Linear(in_features, out_features)
+        self._bias = nn.Parameter(torch.empty_like(self._linear.bias).normal_(0, 1. / bias_size))
+        self._weight = nn.Parameter(torch.empty(bias_size, out_features))
+        nn.init.xavier_normal_(self._weight)
+
+    def adaptation_parameters(self):
+        return self.parameters()
+
+    def forward(self, x: torch.tensor):
+        return self._linear(x) + self._bias @ self._weight
 
 
 class MLP(nn.Module):
     def __init__(
-        self,
-        layer_widths: List[int],
-        final_activation: Callable = lambda x: x,
-        bias_linear: bool = False,
-        extra_head_layers: List[int] = None,
-        w_linear: bool = False,
+            self,
+            layer_widths: List[int],
+            final_activation: Callable = lambda x: x,
+            bias_linear: bool = False,
+            extra_head_layers: List[int] = None,
+            w_linear: bool = False,
     ):
         super().__init__()
 
@@ -70,12 +89,10 @@ class MLP(nn.Module):
             self.post_seq = self.seq[-2:]
 
             self.head_seq = nn.Sequential()
-            extra_head_layers = [
-                layer_widths[-2] + layer_widths[-1]
-            ] + extra_head_layers
+            extra_head_layers = [layer_widths[-2] + layer_widths[-1]] + extra_head_layers
 
             for idx, (infc, outfc) in enumerate(
-                zip(extra_head_layers[:-1], extra_head_layers[1:])
+                    zip(extra_head_layers[:-1], extra_head_layers[1:])
             ):
                 self.head_seq.add_module(f"relu_{idx}", nn.ReLU())
                 w = linear(extra_head_layers[idx], extra_head_layers[idx + 1])
@@ -88,6 +105,9 @@ class MLP(nn.Module):
             return self._final_activation(self.post_seq(h)), self.head_seq(head_input)
         else:
             return self._final_activation(self.seq(x))
+
+    def adaptation_parameters(self):
+        return self.parameters()
 
 
 if __name__ == "__main__":
