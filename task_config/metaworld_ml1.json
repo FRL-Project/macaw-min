@@ -1,8 +1,9 @@
 {
-    "env": "metaworld",
+    "env": "ml1",
+    "env_ml1_name": "button-press-topdown-v2",
     "total_tasks": 1,
-    "train_tasks": [0],
-    "test_tasks": [0],
+    "train_tasks": [1],
+    "test_tasks": [1],
     "train_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5",
     "test_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5"
 }
