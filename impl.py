@@ -2,7 +2,7 @@ import copy
 import json
 from collections import namedtuple
 from itertools import count
-from typing import List, Optional
+from typing import List
 
 import higher
 import hydra
@@ -13,21 +13,27 @@ import torch.distributions as D
 import torch.optim as O
 from garage.envs import MetaWorldSetTaskEnv
 from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
-from garage.experiment.deterministic import set_seed, get_seed
-from garage.sampler import RaySampler, WorkerFactory, DefaultWorker
+from garage.experiment.deterministic import set_seed
 from hydra.utils import get_original_cwd
+from tqdm import tqdm
 
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
 from utils import ReplayBuffer
 
+import gym
+
+# TODO remove!
+# temporary: do not print warning
+gym.logger.set_level(40)
+
 
 def rollout_policy(policy: MLP, env, render: bool = False) -> List[Experience]:
     trajectory = []
-    state = env.reset()
+    state, _ = env.reset()
     if render:
-        env.render()
+        env.render(mode='human')
     done = False
     total_reward = 0
     episode_t = 0
@@ -37,7 +43,7 @@ def rollout_policy(policy: MLP, env, render: bool = False) -> List[Experience]:
     while not done:
         with torch.no_grad():
             action_sigma = 0.2
-            action = policy(torch.tensor(state).to(current_device).float()).squeeze()
+            action = policy(torch.from_numpy(state).to(current_device).float()).squeeze()
 
             action_dist = D.Normal(action, torch.empty_like(action).fill_(action_sigma))
             log_prob = action_dist.log_prob(action).to("cpu").numpy().sum()
@@ -45,18 +51,19 @@ def rollout_policy(policy: MLP, env, render: bool = False) -> List[Experience]:
             np_action = action.squeeze().cpu().numpy()
             np_action = np_action.clip(min=env.action_space.low, max=env.action_space.high)
 
-        next_state, reward, done, info_dict = env.step(np_action)
+        env_step = env.step(np_action)
+        next_state, reward, done, info_dict = env_step.observation, env_step.reward, env_step.terminal or env_step.timeout, env_step.env_info
 
         if "success" in info_dict and info_dict["success"]:
             success = True
 
         if render:
-            env.render()
+            env.render(mode='human')
         trajectory.append(Experience(state, np_action, next_state, reward, done))
         state = next_state
         total_reward += reward
         episode_t += 1
-        if episode_t >= env._max_episode_steps or done:
+        if episode_t >= env._current_env.max_path_length or done:
             break
 
     return trajectory, total_reward, success
@@ -141,6 +148,12 @@ def get_metaworld_env(env_name: str = 'ml10', env_ml1_name: str = ''):
     return env_specs, train_sampler, test_sampler
 
 
+def soft_update(source, target, args):
+    for param_source, param_target in zip(source.named_parameters(), target.named_parameters()):
+        assert param_source[0] == param_target[0]
+        param_target[1].data = args.target_vf_alpha * param_target[1].data + (1 - args.target_vf_alpha) * param_source[1].data
+
+
 @hydra.main(config_path="config", config_name="config.yaml")
 def run(args):
     with open(f"{get_original_cwd()}/{args.task_config}", "r") as f:
@@ -216,43 +229,77 @@ def run(args):
                 #     print("train_step", train_step_idx, " rewards", adapted_reward, " success", success)
 
         # evaluation on test set
-        n_exploration_eps = 10
-        eval_policy = copy.deepcopy(policy)
+        if train_step_idx % args.rollout_interval == 0:
+            n_exploration_eps = 10
 
-        env_instances = test_task_sampler.sample(test_task_sampler.n_tasks)
-        env = env_instances[0]()
-        max_episode_length = env.spec.max_episode_length
-        test_episode_sampler = RaySampler.from_worker_factory(
-            WorkerFactory(seed=get_seed(),
-                          max_episode_length=max_episode_length,
-                          n_workers=n_exploration_eps,
-                          worker_class=DefaultWorker,
-                          worker_args={}),
-            agents=eval_policy,
-            envs=env)
+            env_instances = test_task_sampler.sample(test_task_sampler.n_tasks)
+            # TODO directly work with metaworld or get garage sample code to work
+            # env = env_instances[0]()
+            # eval_policy = copy.deepcopy(policy)
+            # max_episode_length = env.spec.max_episode_length
+            # test_episode_sampler = RaySampler.from_worker_factory(
+            #     WorkerFactory(seed=get_seed(),
+            #                   max_episode_length=max_episode_length,
+            #                   n_workers=n_exploration_eps,
+            #                   worker_class=DefaultWorker,
+            #                   worker_args={}),
+            #     agents=eval_policy,
+            #     envs=env)
 
-        for env_instance in env_instances:
-            # reset policy and value function
-            eval_policy = copy.deepcopy(policy)
-            eval_value_function = copy.deepcopy(vf)
-            # offline update of value function and policy
-            env_name = env_instance._task['inner'].env_name
+            adapted_trajectories, adapted_rewards, successes = list(), list(), list()
 
-            # TODO map env_name to test buffer index
-            env_idx = 0
-            test_buffer = test_buffers[env_idx]
+            looper = tqdm(env_instances)
+            for env_instance in looper:
+                # reset policy and value function
+                eval_policy = copy.deepcopy(policy)
+                eval_value_function = copy.deepcopy(vf)
+                # offline update of value function and policy
+                env_name = env_instance._task['inner'].env_name
 
-            value_batch, value_batch_dict = test_buffer.sample(args.eval_batch_size, return_both=True)
-            value_batch = torch.tensor(value_batch, requires_grad=False).to(args.device)
-            policy_batch, policy_batch_dict = value_batch, value_batch_dict
+                # TODO map env_name to test buffer index
+                env_idx = 0
+                test_buffer = test_buffers[env_idx]
 
-            # TODO update policy and value function
+                value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
+                policy_batch_dict = value_batch_dict
 
-            # obtain episodes on the current task instance
-            adapted_eps = test_episode_sampler.obtain_samples(0, max_episode_length * n_exploration_eps, eval_policy, env_instance)
+                opt = O.SGD([{'params': p, 'lr': None} for p in eval_value_function.adaptation_parameters()])
+                with higher.innerloop_ctx(eval_value_function, opt, override={'lr': vf_lrs}) as (f_value_function, diff_value_opt):
+                    loss = vf_loss_on_batch(f_value_function, value_batch_dict, inner=True)
+                    diff_value_opt.step(loss)
 
-            # TODO log rewards and so on
+                    # Soft update target value function parameters
+                    # self.soft_update(f_value_function, vf_target) TODO use this soft update?
 
+                    policy_opt = O.SGD([{'params': p, 'lr': None} for p in eval_policy.adaptation_parameters()])
+                    with higher.innerloop_ctx(eval_policy, policy_opt, override={'lr': policy_lrs}) as (f_policy, diff_policy_opt):
+                        loss = policy_loss_on_batch(f_policy, f_value_function, policy_batch_dict,
+                                                    adv_coef=args.advantage_head_coef,
+                                                    inner=True)
+                        diff_policy_opt.step(loss)
+
+                        # obtain episodes on the current task instance
+                        env = env_instance()
+
+                        # TODO collect logs per test environment and not per test environment instance
+
+                        # TODO call multiple times
+                        eps_rewards = list()
+                        eps_success = list()
+                        for eps in range(n_exploration_eps):  # TODO try to make loop parallel with deepcopies
+                            adapted_trajectory, adapted_reward, success = rollout_policy(f_policy, env, render=args.render)
+                            eps_rewards.append(adapted_reward)
+                            eps_success.append(success)
+
+                        # TODO log per task
+                        env_name, np.mean(eps_rewards), np.mean(eps_success)
+
+                        # add current task instance to total lists
+                        adapted_rewards.append(eps_rewards)
+                        successes.append(eps_success)
+
+            # TODO log average rewards and so on
+            print("train_steps", train_step_idx, " rewards", np.mean(adapted_rewards), " success", np.mean(success))
 
 
 if __name__ == "__main__":
