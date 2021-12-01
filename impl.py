@@ -11,12 +11,16 @@ import numpy as np
 import torch
 import torch.distributions as D
 import torch.optim as O
+from dowel import tabular, logger
+from garage import log_multitask_performance, EpisodeBatch
 from garage.envs import MetaWorldSetTaskEnv
 from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
-from garage.experiment.deterministic import set_seed
+from garage.experiment.deterministic import set_seed, get_seed
+from garage.sampler import RaySampler, WorkerFactory, LocalSampler
 from hydra.utils import get_original_cwd
 from tqdm import tqdm
 
+from worker import CustomWorker
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
@@ -102,7 +106,7 @@ def read_buffers(action_dim, args, obs_dim, task_numbers, buffer_paths):
             args.inner_buffer_size,
             obs_dim,
             action_dim,
-            discount_factor=0.99,
+            discount_factor=args.discount,
             immutable=True,
             load_from=buffer_paths[i],
         )
@@ -233,20 +237,20 @@ def run(args):
             n_exploration_eps = 10
 
             env_instances = test_task_sampler.sample(test_task_sampler.n_tasks)
-            # TODO directly work with metaworld or get garage sample code to work
-            # env = env_instances[0]()
-            # eval_policy = copy.deepcopy(policy)
-            # max_episode_length = env.spec.max_episode_length
-            # test_episode_sampler = RaySampler.from_worker_factory(
-            #     WorkerFactory(seed=get_seed(),
-            #                   max_episode_length=max_episode_length,
-            #                   n_workers=n_exploration_eps,
-            #                   worker_class=DefaultWorker,
-            #                   worker_args={}),
-            #     agents=eval_policy,
-            #     envs=env)
 
-            adapted_trajectories, adapted_rewards, successes = list(), list(), list()
+            env = env_instances[0]()
+            eval_policy = copy.deepcopy(policy)
+            max_episode_length = env.spec.max_episode_length
+            test_episode_sampler = LocalSampler.from_worker_factory(
+                WorkerFactory(seed=get_seed(),
+                              max_episode_length=max_episode_length,
+                              n_workers=n_exploration_eps,
+                              worker_class=CustomWorker,
+                              worker_args={}),
+                agents=eval_policy,
+                envs=env)
+
+            adapted_episodes = list()
 
             looper = tqdm(env_instances)
             for env_instance in looper:
@@ -279,27 +283,39 @@ def run(args):
                         diff_policy_opt.step(loss)
 
                         # obtain episodes on the current task instance
-                        env = env_instance()
 
-                        # TODO collect logs per test environment and not per test environment instance
+                        with torch.no_grad():
 
-                        # TODO call multiple times
-                        eps_rewards = list()
-                        eps_success = list()
-                        for eps in range(n_exploration_eps):  # TODO try to make loop parallel with deepcopies
-                            adapted_trajectory, adapted_reward, success = rollout_policy(f_policy, env, render=args.render)
-                            eps_rewards.append(adapted_reward)
-                            eps_success.append(success)
+                            adapted_eps = test_episode_sampler.obtain_samples(0,
+                                                                              num_samples=max_episode_length * n_exploration_eps,
+                                                                              agent_update=f_policy,
+                                                                              env_update=env_instance)
+                            # env = env_instance()
+                            # eps_rewards = list()
+                            # eps_success = list()
+                            # for eps in range(n_exploration_eps):
+                            #     adapted_trajectory, adapted_reward, success = rollout_policy(f_policy, env, render=args.render)
+                            #     eps_rewards.append(adapted_reward)
+                            #     eps_success.append(success)
 
-                        # TODO log per task
-                        env_name, np.mean(eps_rewards), np.mean(eps_success)
+                        # add adapted episodes
+                        adapted_episodes.append(adapted_eps)
 
                         # add current task instance to total lists
                         adapted_rewards.append(eps_rewards)
                         successes.append(eps_success)
 
-            # TODO log average rewards and so on
-            print("train_steps", train_step_idx, " rewards", np.mean(adapted_rewards), " success", np.mean(success))
+            # TODO log
+            prefix = 'MetaTest'
+            with tabular.prefix(prefix + '/'):
+                log_multitask_performance(
+                    train_step_idx,
+                    EpisodeBatch.concatenate(*adapted_episodes),
+                    discount=args.discount,
+                    name_map=None)
+
+            logger.dump_all(train_step_idx)
+            tabular.clear()
 
 
 if __name__ == "__main__":
