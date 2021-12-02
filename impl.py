@@ -19,7 +19,7 @@ from garage import log_multitask_performance, EpisodeBatch
 from garage.envs import MetaWorldSetTaskEnv
 from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
 from garage.experiment.deterministic import set_seed, get_seed
-from garage.sampler import WorkerFactory, LocalSampler
+from garage.sampler import WorkerFactory, LocalSampler, RaySampler
 from hydra.utils import get_original_cwd
 from tqdm import tqdm
 
@@ -296,14 +296,21 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
 
     max_episode_length = env.spec.max_episode_length
 
-    test_episode_sampler = LocalSampler.from_worker_factory(
-        WorkerFactory(seed=get_seed(),
-                      max_episode_length=max_episode_length,
-                      n_workers=n_exploration_eps,
-                      worker_class=CustomWorker,
-                      worker_args={}),
-        agents=eval_policy,
-        envs=env)
+    worker_factory = WorkerFactory(seed=get_seed(),
+                                   max_episode_length=max_episode_length,
+                                   n_workers=n_exploration_eps,
+                                   worker_class=CustomWorker,
+                                   worker_args={})
+
+    if args.device == 'cpu':
+        test_episode_sampler = RaySampler.from_worker_factory(worker_factory=worker_factory,
+                                                              agents=eval_policy,
+                                                              envs=env)
+    else:
+        # choose the local sampler on the gpu
+        test_episode_sampler = LocalSampler.from_worker_factory(worker_factory=worker_factory,
+                                                                agents=eval_policy,
+                                                                envs=env)
 
     adapted_episodes = list()
 
@@ -341,9 +348,16 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
                 # obtain episodes on the current task instance
 
                 with torch.no_grad():
+                    # TODO is this really working and using the updated parameters of f_policy?
+                    adapted_policy = eval_policy
+                    adapted_policy.load_state_dict(f_policy.state_dict())
+                    for variable in adapted_policy.parameters():
+                        variable.detach_()
+
+                    adapted_policy.eval()
                     adapted_eps = test_episode_sampler.obtain_samples(0,
                                                                       num_samples=max_episode_length * n_exploration_eps,
-                                                                      agent_update=f_policy,
+                                                                      agent_update=adapted_policy,
                                                                       env_update=env_instance)
                     # env = env_instance()
                     # eps_rewards = list()

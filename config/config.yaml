@@ -11,7 +11,7 @@ include_goal: False
 advantage_head_coef: 1e-3
 net_width: 128
 net_depth: 3
-device: cuda
+device: cpu
 outer_batch_size: 256
 inner_batch_size: 256
 rollout_interval: 200
