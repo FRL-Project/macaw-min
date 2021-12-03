@@ -1,4 +1,6 @@
 seed: 1
+snapshot_load: True
+snapshot_path: ./outputs
 outer_policy_lr: 1e-4
 outer_value_lr: 1e-4
 inner_policy_lr: 1e-2

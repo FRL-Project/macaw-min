@@ -412,7 +412,7 @@ class Snapshotter:
 
     @staticmethod
     def get_file_name(train_step_idx):
-        return 'checkpoint_' + str(train_step_idx) + '.pth'
+        return f'checkpoint_{train_step_idx:05d}.pth'
 
 
 if __name__ == "__main__":
