@@ -189,7 +189,18 @@ def run(args):
     policy, vf, task_buffers, test_buffers = build_networks_and_buffers(args, env_specs, task_config)
     policy_opt, vf_opt, policy_lrs, vf_lrs = get_opts_and_lrs(args, policy, vf)
 
-    for train_step_idx in count(start=1):
+    start_itr = 1
+
+    # load a snapshot
+    if args.snapshot_load:
+        start_itr, policy_state, policy_opt_state, vf_state, vf_opt_state = Snapshotter.load_snapshot(path=args.snapshot_path)
+        start_itr += 1  # start with the next iteration
+        policy.load_state_dict(policy_state)
+        policy_opt.load_state_dict(policy_opt_state)
+        vf.load_state_dict(vf_state)
+        vf_opt.load_state_dict(vf_opt_state)
+
+    for train_step_idx in count(start=start_itr):
         itr_start_time = time.time()
         for i, (train_task_idx, task_buffer) in enumerate(
                 zip(task_config.train_tasks, task_buffers)
@@ -390,7 +401,21 @@ class Snapshotter:
 
     @staticmethod
     def load_snapshot(path):
-        snapshot = torch.load(path)
+        if not os.path.isabs(path):
+            path = os.path.join(get_original_cwd(), path)
+
+        files = [file for file in os.listdir(path)
+                 if os.path.isfile(os.path.join(path, file)) and file.startswith('checkpoint') and file.endswith('.pth')]
+
+        # sort to get the latest checkpoint
+        files.sort()
+        checkpoint_file = files[-1]
+
+        checkpoint_file_path = os.path.join(path, checkpoint_file)
+
+        logger.log(f'Loading snapshot {checkpoint_file_path}')
+
+        snapshot = torch.load(checkpoint_file_path)
 
         return snapshot['train_step_idx'], \
                snapshot['policy_state_dict'], \
