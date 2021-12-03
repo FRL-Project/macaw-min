@@ -274,15 +274,7 @@ def run(args):
             tabular.clear()
 
             # save checkpoint
-            checkpoint_file_name = 'checkpoint_' + str(train_step_idx) + '.pth'
-
-            torch.save({
-                'train_step_idx': train_step_idx,
-                'policy_state_dict': policy.state_dict(),
-                'policy_optimizer_state_dict': policy_opt.state_dict(),
-                'value_function_state_dict': vf.state_dict(),
-                'value_function_optimizer_state_dict': vf_opt.state_dict(),
-            }, os.path.join(log_dir, checkpoint_file_name))
+            Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
 
         if target_train_steps_reached:
             break
@@ -392,6 +384,35 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
             EpisodeBatch.concatenate(*adapted_episodes),
             discount=args.discount,
             name_map=None)
+
+
+class Snapshotter:
+
+    @staticmethod
+    def load_snapshot(path):
+        snapshot = torch.load(path)
+
+        return snapshot['train_step_idx'], \
+               snapshot['policy_state_dict'], \
+               snapshot['policy_optimizer_state_dict'], \
+               snapshot['value_function_state_dict'], \
+               snapshot['value_function_optimizer_state_dict'],
+
+    @staticmethod
+    def save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt):
+        file_name = Snapshotter.get_file_name(train_step_idx)
+
+        torch.save({
+            'train_step_idx': train_step_idx,
+            'policy_state_dict': policy.state_dict(),
+            'policy_optimizer_state_dict': policy_opt.state_dict(),
+            'value_function_state_dict': vf.state_dict(),
+            'value_function_optimizer_state_dict': vf_opt.state_dict(),
+        }, os.path.join(log_dir, file_name))
+
+    @staticmethod
+    def get_file_name(train_step_idx):
+        return 'checkpoint_' + str(train_step_idx) + '.pth'
 
 
 if __name__ == "__main__":
