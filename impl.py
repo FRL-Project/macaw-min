@@ -244,8 +244,12 @@ def run(args):
 
             total_train_env_steps += args.inner_batch_size + args.outer_batch_size
 
-        # evaluation on test set
-        if train_step_idx % args.eval_interval == 0:
+        target_train_steps_reached = False
+        if total_train_env_steps >= 6e6:  # reached target environment steps
+            target_train_steps_reached = True
+
+        if train_step_idx % args.epoch_interval == 0 or target_train_steps_reached:
+            # evaluation on test set
             logger.log("Start eval ...")
             n_exploration_eps = 10
 
@@ -260,7 +264,7 @@ def run(args):
                        vf_lrs=vf_lrs,
                        n_test_tasks=None)
 
-        if train_step_idx % args.eval_interval == 0:
+            # log stats
             logger.log('Time %.2f s' % (time.time() - start_time))
             logger.log('EpochTime %.2f s' % (time.time() - itr_start_time))
             tabular.record('TotalEnvSteps', total_train_env_steps)
@@ -269,7 +273,18 @@ def run(args):
             logger.dump_all(train_step_idx)
             tabular.clear()
 
-        if total_train_env_steps >= 6e6:  # reached target environment steps
+            # save checkpoint
+            checkpoint_file_name = 'checkpoint_' + str(train_step_idx) + '.pth'
+
+            torch.save({
+                'train_step_idx': train_step_idx,
+                'policy_state_dict': policy.state_dict(),
+                'policy_optimizer_state_dict': policy_opt.state_dict(),
+                'value_function_state_dict': vf.state_dict(),
+                'value_function_optimizer_state_dict': vf_opt.state_dict(),
+            }, os.path.join(log_dir, checkpoint_file_name))
+
+        if target_train_steps_reached:
             break
 
 

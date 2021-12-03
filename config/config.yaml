@@ -15,7 +15,7 @@ device: cpu
 outer_batch_size: 256
 inner_batch_size: 256
 rollout_interval: 200
-eval_interval: 200
+epoch_interval: 200
 eval_batch_size: 256
 render: False
 discount: 0.99
