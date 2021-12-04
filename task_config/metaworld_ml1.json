@@ -4,6 +4,6 @@
     "total_tasks": 1,
     "train_tasks": [1],
     "test_tasks": [1],
-    "train_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5",
-    "test_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5"
+    "train_buffer_paths": "../../../macaw_offline_data/metaworld/{}.hdf5",
+    "test_buffer_paths": "../../../macaw_offline_data/metaworld/{}.hdf5"
 }
