@@ -1,0 +1,1 @@
+{"env": "ml1", "total_tasks": [10], "train_tasks": [13, 32, 5, 22, 33, 14, 6, 26, 12], "test_tasks": [17, 19, 47, 4, 43], "train_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5", "test_buffer_paths": "../../../macaw_offline_data/metaworld/buffers_metaworld_train_{}.hdf5"}
