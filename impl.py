@@ -103,21 +103,29 @@ def build_networks_and_buffers(args, env, task_config):
 
 
 def read_buffers(action_dim, args, obs_dim, task_numbers, buffer_paths):
+    # Load task to index mapping
+    path_env_mapping = "../../../config/env_mapping_sac_training.json"
+    with open(path_env_mapping, 'r') as mapping_data_file:
+        env_name_to_idx = json.load(mapping_data_file)
+
+    idx_to_env_name = {v: k for k, v in env_name_to_idx.items()}
+
     buffer_paths = [
         buffer_paths.format(idx) for idx in task_numbers
     ]
 
-    buffers = [
-        ReplayBuffer(
-            args.inner_buffer_size,
-            obs_dim,
-            action_dim,
-            discount_factor=args.discount,
-            immutable=True,
-            load_from=buffer_paths[i],
-        )
-        for i, task in enumerate(task_numbers)
-    ]
+    buffers = dict()
+
+    for i, task_idx in enumerate(task_numbers):
+        buffers[idx_to_env_name[task_idx]] = \
+            ReplayBuffer(
+                args.inner_buffer_size,
+                obs_dim,
+                action_dim,
+                discount_factor=args.discount,
+                immutable=True,
+                load_from=buffer_paths[i],
+            )
 
     return buffers
 
@@ -210,10 +218,10 @@ def run(args):
         for i, (train_task_idx, task_buffer) in enumerate(
                 zip(task_config.train_tasks, task_buffers)
         ):
-            inner_batch = task_buffer.sample(
+            inner_batch = task_buffers[task_buffer].sample(
                 args.inner_batch_size, return_dict=True, device=args.device
             )
-            outer_batch = task_buffer.sample(
+            outer_batch = task_buffers[task_buffer].sample(
                 args.outer_batch_size, return_dict=True, device=args.device
             )
 
@@ -337,12 +345,6 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
 
     adapted_episodes = list()
 
-    # Load task to index mapping
-    path_env_mapping = "../../../config/env_mapping_sac_training.json"
-    mapping_data_file = open(path_env_mapping)
-    maping_data = json.load(mapping_data_file)
-    mapping_data_file.close()
-
     looper = tqdm(env_instances)
     for env_instance in looper:
         # reset policy and value function
@@ -352,10 +354,8 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
         # offline update of value function and policy
         env_name = env_instance._task['inner'].env_name
 
-
-        # TODO map env_name to test buffer index
-        env_idx = maping_data[env_name]
-        test_buffer = test_buffers[env_idx]
+        # map env_name to test buffer index
+        test_buffer = test_buffers[env_name]
 
         value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
         policy_batch_dict = value_batch_dict
