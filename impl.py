@@ -10,6 +10,7 @@ import dowel
 import gym
 import higher
 import hydra
+import argparse
 import metaworld
 import torch
 import torch.distributions as D
@@ -143,7 +144,7 @@ def get_metaworld_env(env_name: str = 'ml10', env_ml1_name: str = ''):
         raise NotImplementedError()
 
     train_sampler = MetaWorldTaskSampler(ml, 'train')
-    env_specs = train_sampler.sample(1)[0]()  # sample one task instance to get environment specs
+    env_specs = train_sampler.sample(len(ml.train_classes))[0]()  # sample one task instance to get environment specs
 
     test_sampler = SetTaskSampler(
         MetaWorldSetTaskEnv,
@@ -161,7 +162,7 @@ def soft_update(source, target, args):
 
 @hydra.main(config_path="config", config_name="config.yaml")
 def run(args):
-    with open(f"{get_original_cwd()}/{args.task_config}", "r") as f:
+    with open(f"{get_original_cwd()}/{args_v2.task_config}", "r") as f:
         task_config = json.load(
             f, object_hook=lambda d: namedtuple("X", d.keys())(*d.values())
         )
@@ -332,6 +333,12 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
 
     adapted_episodes = list()
 
+    # Load task to index mapping
+    path_env_mapping = "../../../config/env_mapping_sac_training.json"
+    mapping_data_file = open(path_env_mapping)
+    maping_data = json.load(mapping_data_file)
+    mapping_data_file.close()
+
     looper = tqdm(env_instances)
     for env_instance in looper:
         # reset policy and value function
@@ -339,10 +346,11 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
         eval_value_function = copy.deepcopy(vf)
 
         # offline update of value function and policy
-        env_name = env_instance._task['inner'].env_name
+        env_name = env_instance._task['inner'].env_nam
+
 
         # TODO map env_name to test buffer index
-        env_idx = 0
+        env_idx = maping_data[env_name]
         test_buffer = test_buffers[env_idx]
 
         value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
@@ -441,4 +449,10 @@ class Snapshotter:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Argumentparser")
+    parser.add_argument('--task_config', default='task_config/metaworld_ml10.json',
+                        type=str, help="Path to task config file")
+    global args_v2
+    args_v2 = parser.parse_args()
+
     run()
