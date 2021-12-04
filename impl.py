@@ -23,6 +23,7 @@ from garage.experiment.deterministic import set_seed, get_seed
 from garage.sampler import WorkerFactory, LocalSampler, RaySampler
 from hydra.utils import get_original_cwd
 from tqdm import tqdm
+from helpers import environmentvariables
 
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
@@ -33,6 +34,7 @@ from worker import CustomWorker
 # TODO remove!
 # temporary: do not print warning
 gym.logger.set_level(40)
+environmentvariables.initialize()
 
 
 def rollout_policy(policy: MLP, env, render: bool = False) -> List[Experience]:
@@ -92,8 +94,10 @@ def build_networks_and_buffers(args, env, task_config):
         w_linear=args.weight_transform,
     ).to(args.device)
 
-    train_buffers = read_buffers(action_dim, args, obs_dim, task_config.train_tasks, task_config.train_buffer_paths)
-    test_buffers = read_buffers(action_dim, args, obs_dim, task_config.test_tasks, task_config.test_buffer_paths)
+    train_buffers = read_buffers(action_dim, args, obs_dim, task_config.train_tasks,
+                                 os.path.join(os.getenv("BUFFER_DIR"), "{}.hdf5"))
+    test_buffers = read_buffers(action_dim, args, obs_dim, task_config.test_tasks,
+                                os.path.join(os.getenv("BUFFER_DIR"), "{}.hdf5"))
 
     return policy, vf, train_buffers, test_buffers
 
