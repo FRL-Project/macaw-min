@@ -5,7 +5,7 @@ import time
 from collections import namedtuple
 from itertools import count
 from typing import List
-
+from datetime import datetime
 import dowel
 import gym
 import higher
@@ -171,7 +171,7 @@ def run(args):
             f, object_hook=lambda d: namedtuple("X", d.keys())(*d.values())
         )
 
-    log_dir = './out'  # TODO set to log dir
+    log_dir = os.path.join(os.getenv("OUT_DIR"), datetime.now().strftime("%Y-%m-%d_%H_%M_%S") + "_MACAW")
     os.makedirs(log_dir)
     setup_logger(log_dir)
 
