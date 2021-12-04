@@ -350,7 +350,7 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
         eval_value_function = copy.deepcopy(vf)
 
         # offline update of value function and policy
-        env_name = env_instance._task['inner'].env_nam
+        env_name = env_instance._task['inner'].env_name
 
 
         # TODO map env_name to test buffer index
