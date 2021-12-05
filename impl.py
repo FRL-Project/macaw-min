@@ -214,6 +214,11 @@ def run(args):
 
     for train_step_idx in range(start_itr, int(5.1e6)):
         itr_start_time = time.time()
+
+        # set training mode
+        policy.train()
+        vf.train()
+
         for i, (train_task_idx, task_buffer) in enumerate(
                 zip(task_config.train_tasks, task_buffers.values())
         ):
