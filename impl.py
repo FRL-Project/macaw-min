@@ -183,6 +183,8 @@ def run(args):
     os.makedirs(log_dir)
     setup_logger(log_dir)
 
+    logger.log(f"Logging to {log_dir}")
+
     start_time = time.time()
 
     total_train_env_steps = 0
@@ -213,7 +215,10 @@ def run(args):
         vf.load_state_dict(vf_state)
         vf_opt.load_state_dict(vf_opt_state)
 
-    for train_step_idx in count(start=start_itr):
+    logger.log("Start training ...")
+
+    looper = tqdm(range(start_itr, int(5.1e6)))
+    for train_step_idx in looper:
         itr_start_time = time.time()
         for i, (train_task_idx, task_buffer) in enumerate(
                 zip(task_config.train_tasks, task_buffers)
@@ -292,6 +297,7 @@ def run(args):
             logger.log('Time %.2f s' % (time.time() - start_time))
             logger.log('EpochTime %.2f s' % (time.time() - itr_start_time))
             tabular.record('TotalEnvSteps', total_train_env_steps)
+            tabular.record('TrainSteps', train_step_idx)
             logger.log(tabular)
 
             logger.dump_all(train_step_idx)
@@ -438,6 +444,8 @@ class Snapshotter:
     @staticmethod
     def save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt):
         file_name = Snapshotter.get_file_name(train_step_idx)
+
+        logger.log(f"Saving snapshot {file_name}")
 
         torch.save({
             'train_step_idx': train_step_idx,
