@@ -29,9 +29,6 @@ from utils import Experience
 from utils import ReplayBuffer
 from worker import CustomWorker
 
-# TODO remove!
-# temporary: do not print warning
-gym.logger.set_level(40)
 environmentvariables.initialize()
 
 
@@ -218,12 +215,12 @@ def run(args):
     for train_step_idx in range(start_itr, int(5.1e6)):
         itr_start_time = time.time()
         for i, (train_task_idx, task_buffer) in enumerate(
-                zip(task_config.train_tasks, task_buffers)
+                zip(task_config.train_tasks, task_buffers.values())
         ):
-            inner_batch = task_buffers[task_buffer].sample(
+            inner_batch = task_buffer.sample(
                 args.inner_batch_size, return_dict=True, device=args.device
             )
-            outer_batch = task_buffers[task_buffer].sample(
+            outer_batch = task_buffer.sample(
                 args.outer_batch_size, return_dict=True, device=args.device
             )
 
@@ -370,30 +367,21 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
                                             inner=True)
                 diff_policy_opt.step(loss)
 
-                # obtain episodes on the current task instance
+                # extract updated policy
+                adapted_policy = eval_policy
+                adapted_policy.load_state_dict(f_policy.state_dict())
+                for variable in adapted_policy.parameters():
+                    variable.detach_()
 
-                with torch.no_grad():
-                    # TODO is this really working and using the updated parameters of f_policy?
-                    adapted_policy = eval_policy
-                    adapted_policy.load_state_dict(f_policy.state_dict())
-                    for variable in adapted_policy.parameters():
-                        variable.detach_()
-
-                    adapted_policy.eval()
-                    adapted_eps = test_episode_sampler.obtain_samples(0,
-                                                                      num_samples=max_episode_length * n_exploration_eps,
-                                                                      agent_update=adapted_policy,
-                                                                      env_update=env_instance)
-                    # env = env_instance()
-                    # eps_rewards = list()
-                    # eps_success = list()
-                    # for eps in range(n_exploration_eps):
-                    #     adapted_trajectory, adapted_reward, success = rollout_policy(f_policy, env, render=args.render)
-                    #     eps_rewards.append(adapted_reward)
-                    #     eps_success.append(success)
-
-                # add adapted episodes
-                adapted_episodes.append(adapted_eps)
+        # obtain episodes on the current task instance
+        with torch.no_grad():
+            adapted_policy.eval()
+            adapted_eps = test_episode_sampler.obtain_samples(0,
+                                                              num_samples=max_episode_length * n_exploration_eps,
+                                                              agent_update=adapted_policy,
+                                                              env_update=env_instance)
+        # add adapted episodes
+        adapted_episodes.append(adapted_eps)
 
     # log evaluation stats
     with tabular.prefix('MetaTest' + '/'):
