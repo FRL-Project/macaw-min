@@ -10,7 +10,7 @@ outer_buffer_size: -1
 weight_transform: True
 include_goal: False
 advantage_head_coef: 1e-3
-net_width: 128
+net_width: 300
 net_depth: 3
 device: cpu
 outer_batch_size: 256
