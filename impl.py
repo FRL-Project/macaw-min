@@ -3,7 +3,6 @@ import json
 import os
 import time
 from collections import namedtuple
-from itertools import count
 from typing import List
 from datetime import datetime
 import dowel
@@ -22,7 +21,6 @@ from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
 from garage.experiment.deterministic import set_seed, get_seed
 from garage.sampler import WorkerFactory, LocalSampler, RaySampler
 from hydra.utils import get_original_cwd
-from tqdm import tqdm
 from helpers import environmentvariables
 
 from losses import policy_loss_on_batch, vf_loss_on_batch
@@ -217,8 +215,7 @@ def run(args):
 
     logger.log("Start training ...")
 
-    looper = tqdm(range(start_itr, int(5.1e6)))
-    for train_step_idx in looper:
+    for train_step_idx in range(start_itr, int(5.1e6)):
         itr_start_time = time.time()
         for i, (train_task_idx, task_buffer) in enumerate(
                 zip(task_config.train_tasks, task_buffers)
@@ -273,11 +270,7 @@ def run(args):
 
             total_train_env_steps += args.inner_batch_size + args.outer_batch_size
 
-        target_train_steps_reached = False
-        if total_train_env_steps >= 6e6:  # reached target environment steps
-            target_train_steps_reached = True
-
-        if train_step_idx % args.epoch_interval == 0 or target_train_steps_reached:
+        if train_step_idx % args.epoch_interval == 0:
             # evaluation on test set
             logger.log("Start eval ...")
             n_exploration_eps = 10
@@ -305,9 +298,6 @@ def run(args):
 
             # save checkpoint
             Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
-
-        if target_train_steps_reached:
-            break
 
 
 def setup_logger(log_dir):
@@ -351,8 +341,7 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
 
     adapted_episodes = list()
 
-    looper = tqdm(env_instances)
-    for env_instance in looper:
+    for env_instance in env_instances:
         # reset policy and value function
         eval_policy = copy.deepcopy(policy)
         eval_value_function = copy.deepcopy(vf)
