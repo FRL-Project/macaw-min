@@ -1,15 +1,15 @@
+import argparse
 import copy
 import json
 import os
 import time
 from collections import namedtuple
-from typing import List
 from datetime import datetime
+from typing import List
+
 import dowel
-import gym
 import higher
 import hydra
-import argparse
 import metaworld
 import torch
 import torch.distributions as D
@@ -21,8 +21,9 @@ from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
 from garage.experiment.deterministic import set_seed, get_seed
 from garage.sampler import WorkerFactory, LocalSampler, RaySampler
 from hydra.utils import get_original_cwd
-from helpers import environmentvariables
+from torch import nn
 
+from helpers import environmentvariables
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
@@ -167,6 +168,18 @@ def soft_update(source, target, args):
         param_target[1].data = args.target_vf_alpha * param_target[1].data + (1 - args.target_vf_alpha) * param_source[1].data
 
 
+def update_model(model: nn.Module, optimizer: torch.optim.Optimizer, clip: float = None, extra_grad: list = None):
+    if clip is not None:
+        grad = torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+    else:
+        grad = None
+
+    optimizer.step()
+    optimizer.zero_grad()
+
+    return grad
+
+
 @hydra.main(config_path="config", config_name="config.yaml")
 def run(args):
     with open(f"{get_original_cwd()}/{args_v2.task_config}", "r") as f:
@@ -271,6 +284,11 @@ def run(args):
                 #     print("train_step", train_step_idx, " rewards", adapted_reward, " success", success)
 
             total_train_env_steps += args.inner_batch_size + args.outer_batch_size
+
+        # Meta update the value function
+        vf_grad = update_model(vf, vf_opt, clip=1e9)
+        # Meta update the policy
+        policy_grad = update_model(policy, policy_opt, clip=1e9)
 
         if train_step_idx % args.epoch_interval == 0:
             # evaluation on test set
