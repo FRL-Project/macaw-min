@@ -316,8 +316,9 @@ def run(args):
             logger.dump_all(train_step_idx)
             tabular.clear()
 
-            # save checkpoint
-            Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
+            if train_step_idx % args.epoch_interval * 10 == 0:
+                # save checkpoint
+                Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
 
 
 def setup_logger(log_dir):
