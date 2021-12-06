@@ -28,7 +28,7 @@ from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
 from utils import ReplayBuffer
-from worker import CustomWorker
+from custom_worker import CustomWorker
 
 environmentvariables.initialize()
 
