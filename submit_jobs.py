@@ -16,11 +16,12 @@ task_config_file = {
 experiments_params = {
     "macaw": {
         "outer_lr": {
-            "outer_policy_lr": [1e-3, 5e-4, 1e-4, 5e-5],
-            "outer_value_lr": [1e-4]
+            "outer_policy_lr": [1e-3, 1e-4, 1e-5],
+            "outer_value_lr": [1e-3, 1e-4, 1e-5]
         },
-        "dis": {
-            "discount": [0.95, 0.99, 0.999]
+        "inner_lr": {
+            'inner_policy_lr': [1e-1, 1e-2, 1e-3],
+            'inner_value_lr': [1e-1, 1e-2, 1e-3]
         }
     }
 }
