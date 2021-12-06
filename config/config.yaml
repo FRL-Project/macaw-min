@@ -1,5 +1,6 @@
 task_config: 'task_config/metaworld_ml1.json'
 seed: 1
+ray_sampler: False
 snapshot_load: False
 snapshot_path: ./outputs
 outer_policy_lr: 1e-4

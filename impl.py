@@ -350,7 +350,7 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
                                    worker_class=CustomWorker,
                                    worker_args={})
 
-    if args.device == 'cpu':
+    if args.ray_sampler:
         test_episode_sampler = RaySampler.from_worker_factory(worker_factory=worker_factory,
                                                               agents=eval_policy,
                                                               envs=env)
