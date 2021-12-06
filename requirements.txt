@@ -5,10 +5,10 @@ git+https://github.com/rlworkgroup/metaworld.git@a0009ed9a208ff9864a5c1368c04c27
 gym~=0.17.2
 h5py~=3.6.0
 imageio
-mujoco_py
+mujoco_py<2.1,>=2.0
 git+https://github.com/dennisl88/rand_param_envs.git@4d1529d61ca0d65ed4bd9207b108d4a4662a4da0#egg=rand_param_envs
 hydra-core
 garage~=2021.3.0
 tqdm~=4.62.3
-dowel~=0.0.3
+dowel==0.0.3
 click~=8.0.3
