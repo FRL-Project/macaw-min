@@ -1,16 +1,15 @@
+import argparse
 import copy
 import json
 import os
 import time
 from collections import namedtuple
-from itertools import count
-from typing import List
 from datetime import datetime
+from typing import List
+
 import dowel
-import gym
 import higher
 import hydra
-import argparse
 import metaworld
 import torch
 import torch.distributions as D
@@ -22,18 +21,15 @@ from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
 from garage.experiment.deterministic import set_seed, get_seed
 from garage.sampler import WorkerFactory, LocalSampler, RaySampler
 from hydra.utils import get_original_cwd
-from tqdm import tqdm
-from helpers import environmentvariables
+from torch import nn
 
+from helpers import environmentvariables
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
 from utils import ReplayBuffer
 from worker import CustomWorker
 
-# TODO remove!
-# temporary: do not print warning
-gym.logger.set_level(40)
 environmentvariables.initialize()
 
 
@@ -103,21 +99,29 @@ def build_networks_and_buffers(args, env, task_config):
 
 
 def read_buffers(action_dim, args, obs_dim, task_numbers, buffer_paths):
+    # Load task to index mapping
+    path_env_mapping = "../../../config/env_mapping_sac_training.json"
+    with open(path_env_mapping, 'r') as mapping_data_file:
+        env_name_to_idx = json.load(mapping_data_file)
+
+    idx_to_env_name = {v: k for k, v in env_name_to_idx.items()}
+
     buffer_paths = [
         buffer_paths.format(idx) for idx in task_numbers
     ]
 
-    buffers = [
-        ReplayBuffer(
-            args.inner_buffer_size,
-            obs_dim,
-            action_dim,
-            discount_factor=args.discount,
-            immutable=True,
-            load_from=buffer_paths[i],
-        )
-        for i, task in enumerate(task_numbers)
-    ]
+    buffers = dict()
+
+    for i, task_idx in enumerate(task_numbers):
+        buffers[idx_to_env_name[task_idx]] = \
+            ReplayBuffer(
+                args.inner_buffer_size,
+                obs_dim,
+                action_dim,
+                discount_factor=args.discount,
+                immutable=True,
+                load_from=buffer_paths[i],
+            )
 
     return buffers
 
@@ -164,9 +168,21 @@ def soft_update(source, target, args):
         param_target[1].data = args.target_vf_alpha * param_target[1].data + (1 - args.target_vf_alpha) * param_source[1].data
 
 
+def update_model(model: nn.Module, optimizer: torch.optim.Optimizer, clip: float = None, extra_grad: list = None):
+    if clip is not None:
+        grad = torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+    else:
+        grad = None
+
+    optimizer.step()
+    optimizer.zero_grad()
+
+    return grad
+
+
 @hydra.main(config_path="config", config_name="config.yaml")
 def run(args):
-    with open(f"{get_original_cwd()}/{args_v2.task_config}", "r") as f:
+    with open(f"{get_original_cwd()}/{args.task_config}", "r") as f:
         task_config = json.load(
             f, object_hook=lambda d: namedtuple("X", d.keys())(*d.values())
         )
@@ -174,6 +190,8 @@ def run(args):
     log_dir = os.path.join(os.getenv("OUT_DIR"), datetime.now().strftime("%Y-%m-%d_%H_%M_%S") + "_MACAW")
     os.makedirs(log_dir)
     setup_logger(log_dir)
+
+    logger.log(f"Logging to {log_dir}")
 
     start_time = time.time()
 
@@ -205,10 +223,17 @@ def run(args):
         vf.load_state_dict(vf_state)
         vf_opt.load_state_dict(vf_opt_state)
 
-    for train_step_idx in count(start=start_itr):
+    logger.log("Start training ...")
+
+    for train_step_idx in range(start_itr, int(5.1e6)):
         itr_start_time = time.time()
+
+        # set training mode
+        policy.train()
+        vf.train()
+
         for i, (train_task_idx, task_buffer) in enumerate(
-                zip(task_config.train_tasks, task_buffers)
+                zip(task_config.train_tasks, task_buffers.values())
         ):
             inner_batch = task_buffer.sample(
                 args.inner_batch_size, return_dict=True, device=args.device
@@ -260,11 +285,12 @@ def run(args):
 
             total_train_env_steps += args.inner_batch_size + args.outer_batch_size
 
-        target_train_steps_reached = False
-        if total_train_env_steps >= 6e6:  # reached target environment steps
-            target_train_steps_reached = True
+        # Meta update the value function
+        vf_grad = update_model(vf, vf_opt, clip=1e9)
+        # Meta update the policy
+        policy_grad = update_model(policy, policy_opt, clip=1e9)
 
-        if train_step_idx % args.epoch_interval == 0 or target_train_steps_reached:
+        if train_step_idx % args.epoch_interval == 0:
             # evaluation on test set
             logger.log("Start eval ...")
             n_exploration_eps = 10
@@ -284,16 +310,15 @@ def run(args):
             logger.log('Time %.2f s' % (time.time() - start_time))
             logger.log('EpochTime %.2f s' % (time.time() - itr_start_time))
             tabular.record('TotalEnvSteps', total_train_env_steps)
+            tabular.record('TrainSteps', train_step_idx)
             logger.log(tabular)
 
             logger.dump_all(train_step_idx)
             tabular.clear()
 
-            # save checkpoint
-            Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
-
-        if target_train_steps_reached:
-            break
+            if train_step_idx % args.epoch_interval * 10 == 0:
+                # save checkpoint
+                Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
 
 
 def setup_logger(log_dir):
@@ -337,25 +362,16 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
 
     adapted_episodes = list()
 
-    # Load task to index mapping
-    path_env_mapping = "../../../config/env_mapping_sac_training.json"
-    mapping_data_file = open(path_env_mapping)
-    maping_data = json.load(mapping_data_file)
-    mapping_data_file.close()
-
-    looper = tqdm(env_instances)
-    for env_instance in looper:
+    for env_instance in env_instances:
         # reset policy and value function
         eval_policy = copy.deepcopy(policy)
         eval_value_function = copy.deepcopy(vf)
 
         # offline update of value function and policy
-        env_name = env_instance._task['inner'].env_nam
+        env_name = env_instance._task['inner'].env_name
 
-
-        # TODO map env_name to test buffer index
-        env_idx = maping_data[env_name]
-        test_buffer = test_buffers[env_idx]
+        # map env_name to test buffer index
+        test_buffer = test_buffers[env_name]
 
         value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
         policy_batch_dict = value_batch_dict
@@ -375,30 +391,21 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
                                             inner=True)
                 diff_policy_opt.step(loss)
 
-                # obtain episodes on the current task instance
+                # extract updated policy
+                adapted_policy = eval_policy
+                adapted_policy.load_state_dict(f_policy.state_dict())
+                for variable in adapted_policy.parameters():
+                    variable.detach_()
 
-                with torch.no_grad():
-                    # TODO is this really working and using the updated parameters of f_policy?
-                    adapted_policy = eval_policy
-                    adapted_policy.load_state_dict(f_policy.state_dict())
-                    for variable in adapted_policy.parameters():
-                        variable.detach_()
-
-                    adapted_policy.eval()
-                    adapted_eps = test_episode_sampler.obtain_samples(0,
-                                                                      num_samples=max_episode_length * n_exploration_eps,
-                                                                      agent_update=adapted_policy,
-                                                                      env_update=env_instance)
-                    # env = env_instance()
-                    # eps_rewards = list()
-                    # eps_success = list()
-                    # for eps in range(n_exploration_eps):
-                    #     adapted_trajectory, adapted_reward, success = rollout_policy(f_policy, env, render=args.render)
-                    #     eps_rewards.append(adapted_reward)
-                    #     eps_success.append(success)
-
-                # add adapted episodes
-                adapted_episodes.append(adapted_eps)
+        # obtain episodes on the current task instance
+        with torch.no_grad():
+            adapted_policy.eval()
+            adapted_eps = test_episode_sampler.obtain_samples(0,
+                                                              num_samples=max_episode_length * n_exploration_eps,
+                                                              agent_update=adapted_policy,
+                                                              env_update=env_instance)
+        # add adapted episodes
+        adapted_episodes.append(adapted_eps)
 
     # log evaluation stats
     with tabular.prefix('MetaTest' + '/'):
@@ -439,6 +446,8 @@ class Snapshotter:
     def save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt):
         file_name = Snapshotter.get_file_name(train_step_idx)
 
+        logger.log(f"Saving snapshot {file_name}")
+
         torch.save({
             'train_step_idx': train_step_idx,
             'policy_state_dict': policy.state_dict(),
@@ -453,10 +462,10 @@ class Snapshotter:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Argumentparser")
-    parser.add_argument('--task_config', default='task_config/metaworld_ml10.json',
-                        type=str, help="Path to task config file")
-    global args_v2
-    args_v2 = parser.parse_args()
+    # parser = argparse.ArgumentParser(description="Argumentparser")
+    # parser.add_argument('--task_config', default='task_config/metaworld_ml10.json',
+    #                     type=str, help="Path to task config file")
+    # global args_v2
+    # args_v2 = parser.parse_args()
 
     run()
