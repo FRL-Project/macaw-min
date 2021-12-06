@@ -370,8 +370,12 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
         # offline update of value function and policy
         env_name = env_instance._task['inner'].env_name
 
+        # TODO remove when we have all buffers
         # map env_name to test buffer index
-        test_buffer = test_buffers[env_name]
+        try:
+            test_buffer = test_buffers[env_name]
+        except:
+            continue
 
         value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
         policy_batch_dict = value_batch_dict
