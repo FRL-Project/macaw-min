@@ -179,7 +179,7 @@ class ReplayBuffer(object):
 
             if needs_to_load:
                 if not silent:
-                    print(f'Loading trajectories from {load_from}')
+                    print(f'Loading trajectories from {load_from} with {self._stored_steps} env steps')
                 if stored > self._size * skip:
                     if not silent:
                         print(f"Attempted to load {stored} offline steps into buffer of size {self._size}.")
