@@ -182,7 +182,7 @@ def update_model(model: nn.Module, optimizer: torch.optim.Optimizer, clip: float
 
 @hydra.main(config_path="config", config_name="config.yaml")
 def run(args):
-    with open(f"{get_original_cwd()}/{args_v2.task_config}", "r") as f:
+    with open(f"{get_original_cwd()}/{args.task_config}", "r") as f:
         task_config = json.load(
             f, object_hook=lambda d: namedtuple("X", d.keys())(*d.values())
         )
@@ -462,10 +462,10 @@ class Snapshotter:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Argumentparser")
-    parser.add_argument('--task_config', default='task_config/metaworld_ml10.json',
-                        type=str, help="Path to task config file")
-    global args_v2
-    args_v2 = parser.parse_args()
+    # parser = argparse.ArgumentParser(description="Argumentparser")
+    # parser.add_argument('--task_config', default='task_config/metaworld_ml10.json',
+    #                     type=str, help="Path to task config file")
+    # global args_v2
+    # args_v2 = parser.parse_args()
 
     run()
