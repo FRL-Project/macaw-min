@@ -19,7 +19,7 @@ from garage import log_multitask_performance, EpisodeBatch
 from garage.envs import MetaWorldSetTaskEnv
 from garage.experiment import MetaWorldTaskSampler, SetTaskSampler
 from garage.experiment.deterministic import set_seed, get_seed
-from garage.sampler import WorkerFactory, LocalSampler, RaySampler
+from garage.sampler import WorkerFactory, LocalSampler, RaySampler, MultiprocessingSampler
 from hydra.utils import get_original_cwd
 from torch import nn
 
@@ -350,12 +350,16 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
                                    worker_class=CustomWorker,
                                    worker_args={})
 
-    if args.ray_sampler:
+    if args.sampler == 'multi':
+        test_episode_sampler = MultiprocessingSampler.from_worker_factory(worker_factory=worker_factory,
+                                                                          agents=eval_policy,
+                                                                          envs=env)
+    elif args.sampler == 'ray':
         test_episode_sampler = RaySampler.from_worker_factory(worker_factory=worker_factory,
                                                               agents=eval_policy,
                                                               envs=env)
     else:
-        # choose the local sampler on the gpu
+        # choose the local sampler
         test_episode_sampler = LocalSampler.from_worker_factory(worker_factory=worker_factory,
                                                                 agents=eval_policy,
                                                                 envs=env)
