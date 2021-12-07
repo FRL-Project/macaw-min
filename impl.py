@@ -22,6 +22,7 @@ from garage.experiment.deterministic import set_seed, get_seed
 from garage.sampler import WorkerFactory, LocalSampler, RaySampler, MultiprocessingSampler
 from hydra.utils import get_original_cwd
 from torch import nn
+from tqdm import tqdm
 
 from helpers import environmentvariables
 from losses import policy_loss_on_batch, vf_loss_on_batch
@@ -366,7 +367,8 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
 
     adapted_episodes = list()
 
-    for env_instance in env_instances:
+    loop = tqdm(env_instances)
+    for env_instance in loop:
         # reset policy and value function
         eval_policy = copy.deepcopy(policy)
         eval_value_function = copy.deepcopy(vf)
