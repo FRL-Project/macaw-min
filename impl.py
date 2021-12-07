@@ -200,6 +200,9 @@ def run(args):
 
     if args.advantage_head_coef == 0:
         args.advantage_head_coef = None
+    if args.n_test_tasks == 0:
+        args.n_test_tasks = None
+    logger.log(f"Using n_test_tasks =  {args.n_test_tasks}")
 
     # env = MetaworldEnv(include_goal=args.include_goal)
 
@@ -291,6 +294,9 @@ def run(args):
         # Meta update the policy
         policy_grad = update_model(policy, policy_opt, clip=1e9)
 
+        # vf_lrs_opt.step()
+        # vf_lrs_opt.zero_grad()
+
         if train_step_idx % args.epoch_interval == 0:
             # evaluation on test set
             logger.log("Start eval ...")
@@ -305,7 +311,7 @@ def run(args):
                        train_step_idx=train_step_idx,
                        vf=vf,
                        vf_lrs=vf_lrs,
-                       n_test_tasks=None)
+                       n_test_tasks=args.n_test_tasks)
 
             # log stats
             logger.log('Time %.2f s' % (time.time() - start_time))
