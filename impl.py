@@ -2,6 +2,7 @@ import argparse
 import copy
 import json
 import os
+import sys
 import time
 from collections import namedtuple
 from datetime import datetime
@@ -228,8 +229,9 @@ def run(args):
         vf_opt.load_state_dict(vf_opt_state)
 
     logger.log("Start training ...")
+    logger.dump_all(step=0)
 
-    for train_step_idx in range(start_itr, int(5.1e6)):
+    for train_step_idx in tqdm(list(range(start_itr, int(5.1e6))), file=sys.stdout):
         itr_start_time = time.time()
 
         # set training mode
@@ -370,11 +372,12 @@ def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_t
         test_episode_sampler = LocalSampler.from_worker_factory(worker_factory=worker_factory,
                                                                 agents=eval_policy,
                                                                 envs=env)
+        # use tqdm with local sampler to show progress
+        env_instances = tqdm(env_instances, file=sys.stdout)
 
     adapted_episodes = list()
 
-    loop = tqdm(env_instances)
-    for env_instance in loop:
+    for env_instance in env_instances:
         # reset policy and value function
         eval_policy = copy.deepcopy(policy)
         eval_value_function = copy.deepcopy(vf)
