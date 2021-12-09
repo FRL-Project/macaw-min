@@ -325,7 +325,7 @@ def run(args):
             logger.dump_all(train_step_idx)
             tabular.clear()
 
-            if train_step_idx % args.epoch_interval * 10 == 0:
+            if train_step_idx % (args.epoch_interval * 10) == 0:
                 # save checkpoint
                 Snapshotter.save_snapshot(args.log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
 
