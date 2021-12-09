@@ -416,7 +416,7 @@ class Evaluator:
             try:
                 test_buffer = test_buffers[env_name]
             except:
-                print("Skipping test task!!!")
+                print(f"Skipping test task {env_name}!!!")
                 continue
 
             value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
