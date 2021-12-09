@@ -102,7 +102,7 @@ def build_networks_and_buffers(args, env, task_config):
 
 def read_buffers(action_dim, args, obs_dim, task_numbers, buffer_paths):
     # Load task to index mapping
-    path_env_mapping = "../../../config/env_mapping_sac_training.json"
+    path_env_mapping = os.path.join(get_original_cwd(), "config/env_mapping_sac_training.json")
     with open(path_env_mapping, 'r') as mapping_data_file:
         env_name_to_idx = json.load(mapping_data_file)
 
@@ -189,11 +189,9 @@ def run(args):
             f, object_hook=lambda d: namedtuple("X", d.keys())(*d.values())
         )
 
-    log_dir = os.path.join(os.getenv("OUT_DIR"), datetime.now().strftime("%Y-%m-%d_%H_%M_%S") + "_MACAW")
-    os.makedirs(log_dir)
-    setup_logger(log_dir)
+    setup_logger(args.log_dir)
 
-    logger.log(f"Logging to {log_dir}")
+    logger.log(f"Logging to {args.log_dir}")
 
     start_time = time.time()
 
@@ -329,7 +327,7 @@ def run(args):
 
             if train_step_idx % args.epoch_interval * 10 == 0:
                 # save checkpoint
-                Snapshotter.save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
+                Snapshotter.save_snapshot(args.log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
 
 
 def setup_logger(log_dir):
@@ -502,5 +500,21 @@ if __name__ == "__main__":
     #                     type=str, help="Path to task config file")
     # global args_v2
     # args_v2 = parser.parse_args()
+
+    arguments = []
+    for argv in sys.argv[1:]:
+        if "task_config=" in argv:
+            continue
+        arguments.append(argv.replace("=", "_"))
+
+    arguments = "_".join(arguments)
+
+    _log_dir = os.path.join(os.getenv("OUT_DIR"),
+                            datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
+                            + "_MACAW_"
+                            + arguments)
+
+    sys.argv.append('+log_dir=' + _log_dir)
+    sys.argv.append('hydra.run.dir=' + _log_dir)
 
     run()
