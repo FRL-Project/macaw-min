@@ -228,6 +228,8 @@ def run(args):
         vf.load_state_dict(vf_state)
         vf_opt.load_state_dict(vf_opt_state)
 
+    evaluator = Evaluator()
+
     logger.log("Start training ...")
     logger.dump_all(step=0)
 
@@ -304,16 +306,16 @@ def run(args):
             logger.log("Start eval ...")
             n_exploration_eps = 10
 
-            eval_model(args=args,
-                       n_exploration_eps=n_exploration_eps,
-                       policy=policy,
-                       policy_lrs=policy_lrs,
-                       test_buffers=test_buffers,
-                       test_task_sampler=test_task_sampler,
-                       train_step_idx=train_step_idx,
-                       vf=vf,
-                       vf_lrs=vf_lrs,
-                       n_test_tasks=args.n_test_tasks)
+            evaluator.eval_model(args=args,
+                                 n_exploration_eps=n_exploration_eps,
+                                 policy=policy,
+                                 policy_lrs=policy_lrs,
+                                 test_buffers=test_buffers,
+                                 test_task_sampler=test_task_sampler,
+                                 train_step_idx=train_step_idx,
+                                 vf=vf,
+                                 vf_lrs=vf_lrs,
+                                 n_test_tasks=args.n_test_tasks)
 
             # log stats
             logger.log('Time %.2f s' % (time.time() - start_time))
@@ -339,100 +341,114 @@ def setup_logger(log_dir):
     logger.add_output(dowel.StdOutput())
 
 
-def eval_model(args, n_exploration_eps, policy, policy_lrs, test_buffers, test_task_sampler, train_step_idx, vf, vf_lrs, n_test_tasks=None):
+class Evaluator:
     """
-    Based on garage MetaEvaluator
+    Based on the garage MetaEvaluator
 
     """
-    eval_policy = copy.deepcopy(policy)
 
-    nr_test_tasks = test_task_sampler.n_tasks if n_test_tasks is None else n_test_tasks
+    def __init__(self):
+        self.test_episode_sampler = None
 
-    env_instances = test_task_sampler.sample(nr_test_tasks)
-    env = env_instances[0]()
+    def get_test_sampler(self, eval_policy, env, max_episode_length, n_exploration_eps, sampler='multi'):
 
-    max_episode_length = env.spec.max_episode_length
+        if self.test_episode_sampler is None:  # only initialize if not already existing
+            worker_factory = WorkerFactory(seed=get_seed(),
+                                           max_episode_length=max_episode_length,
+                                           n_workers=n_exploration_eps,
+                                           worker_class=CustomWorker,
+                                           worker_args={})
 
-    worker_factory = WorkerFactory(seed=get_seed(),
-                                   max_episode_length=max_episode_length,
-                                   n_workers=n_exploration_eps,
-                                   worker_class=CustomWorker,
-                                   worker_args={})
+            if sampler == 'multi':
+                self.test_episode_sampler = MultiprocessingSampler.from_worker_factory(worker_factory=worker_factory,
+                                                                                       agents=eval_policy,
+                                                                                       envs=env)
+            elif sampler == 'ray':
+                self.test_episode_sampler = RaySampler.from_worker_factory(worker_factory=worker_factory,
+                                                                           agents=eval_policy,
+                                                                           envs=env)
+            else:
+                # choose the local sampler
+                self.test_episode_sampler = LocalSampler.from_worker_factory(worker_factory=worker_factory,
+                                                                             agents=eval_policy,
+                                                                             envs=env)
 
-    if args.sampler == 'multi':
-        test_episode_sampler = MultiprocessingSampler.from_worker_factory(worker_factory=worker_factory,
-                                                                          agents=eval_policy,
-                                                                          envs=env)
-    elif args.sampler == 'ray':
-        test_episode_sampler = RaySampler.from_worker_factory(worker_factory=worker_factory,
-                                                              agents=eval_policy,
-                                                              envs=env)
-    else:
-        # choose the local sampler
-        test_episode_sampler = LocalSampler.from_worker_factory(worker_factory=worker_factory,
-                                                                agents=eval_policy,
-                                                                envs=env)
-        # use tqdm with local sampler to show progress
-        env_instances = tqdm(env_instances, file=sys.stdout)
+        return self.test_episode_sampler
 
-    adapted_episodes = list()
+    def eval_model(self, args, n_exploration_eps, policy, policy_lrs, test_buffers, test_task_sampler, train_step_idx, vf, vf_lrs,
+                   n_test_tasks=None):
 
-    for env_instance in env_instances:
-        # reset policy and value function
+        nr_test_tasks = test_task_sampler.n_tasks if n_test_tasks is None else n_test_tasks
+
+        env_instances = test_task_sampler.sample(nr_test_tasks)
+        env = env_instances[0]()
+
+        max_episode_length = env.spec.max_episode_length
         eval_policy = copy.deepcopy(policy)
-        eval_value_function = copy.deepcopy(vf)
 
-        # offline update of value function and policy
-        env_name = env_instance._task['inner'].env_name
+        self.test_episode_sampler = self.get_test_sampler(eval_policy, env, max_episode_length, n_exploration_eps, args.sampler)
 
-        # TODO remove when we have all buffers
-        # map env_name to test buffer index
-        try:
-            test_buffer = test_buffers[env_name]
-        except:
-            continue
+        # use tqdm to show progress
+        # env_instances = tqdm(env_instances, file=sys.stdout)
 
-        value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
-        policy_batch_dict = value_batch_dict
+        adapted_episodes = list()
 
-        opt = O.SGD([{'params': p, 'lr': None} for p in eval_value_function.adaptation_parameters()])
-        with higher.innerloop_ctx(eval_value_function, opt, override={'lr': vf_lrs}) as (f_value_function, diff_value_opt):
-            loss = vf_loss_on_batch(f_value_function, value_batch_dict, inner=True)
-            diff_value_opt.step(loss)
+        for env_instance in env_instances:
+            # reset policy and value function
+            eval_policy = copy.deepcopy(policy)
+            eval_value_function = copy.deepcopy(vf)
 
-            # Soft update target value function parameters
-            # self.soft_update(f_value_function, vf_target) TODO use this soft update?
+            # offline update of value function and policy
+            env_name = env_instance._task['inner'].env_name
 
-            policy_opt = O.SGD([{'params': p, 'lr': None} for p in eval_policy.adaptation_parameters()])
-            with higher.innerloop_ctx(eval_policy, policy_opt, override={'lr': policy_lrs}) as (f_policy, diff_policy_opt):
-                loss = policy_loss_on_batch(f_policy, f_value_function, policy_batch_dict,
-                                            adv_coef=args.advantage_head_coef,
-                                            inner=True)
-                diff_policy_opt.step(loss)
+            # TODO remove when we have all buffers
+            # map env_name to test buffer index
+            try:
+                test_buffer = test_buffers[env_name]
+            except:
+                continue
 
-                # extract updated policy
-                adapted_policy = eval_policy
-                adapted_policy.load_state_dict(f_policy.state_dict())
-                for variable in adapted_policy.parameters():
-                    variable.detach_()
+            value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
+            policy_batch_dict = value_batch_dict
 
-        # obtain episodes on the current task instance
-        with torch.no_grad():
-            adapted_policy.eval()
-            adapted_eps = test_episode_sampler.obtain_samples(0,
-                                                              num_samples=max_episode_length * n_exploration_eps,
-                                                              agent_update=adapted_policy,
-                                                              env_update=env_instance)
-        # add adapted episodes
-        adapted_episodes.append(adapted_eps)
+            opt = O.SGD([{'params': p, 'lr': None} for p in eval_value_function.adaptation_parameters()])
+            with higher.innerloop_ctx(eval_value_function, opt, override={'lr': vf_lrs}) as (f_value_function, diff_value_opt):
+                loss = vf_loss_on_batch(f_value_function, value_batch_dict, inner=True)
+                diff_value_opt.step(loss)
 
-    # log evaluation stats
-    with tabular.prefix('MetaTest' + '/'):
-        log_multitask_performance(
-            train_step_idx,
-            EpisodeBatch.concatenate(*adapted_episodes),
-            discount=args.discount,
-            name_map=None)
+                # Soft update target value function parameters
+                # self.soft_update(f_value_function, vf_target) TODO use this soft update?
+
+                policy_opt = O.SGD([{'params': p, 'lr': None} for p in eval_policy.adaptation_parameters()])
+                with higher.innerloop_ctx(eval_policy, policy_opt, override={'lr': policy_lrs}) as (f_policy, diff_policy_opt):
+                    loss = policy_loss_on_batch(f_policy, f_value_function, policy_batch_dict,
+                                                adv_coef=args.advantage_head_coef,
+                                                inner=True)
+                    diff_policy_opt.step(loss)
+
+                    # extract updated policy
+                    adapted_policy = eval_policy
+                    adapted_policy.load_state_dict(f_policy.state_dict())
+                    for variable in adapted_policy.parameters():
+                        variable.detach_()
+
+            # obtain episodes on the current task instance
+            with torch.no_grad():
+                adapted_policy.eval()
+                adapted_eps = self.test_episode_sampler.obtain_samples(0,
+                                                                       num_samples=max_episode_length * n_exploration_eps,
+                                                                       agent_update=adapted_policy,
+                                                                       env_update=env_instance)
+            # add adapted episodes
+            adapted_episodes.append(adapted_eps)
+
+        # log evaluation stats
+        with tabular.prefix('MetaTest' + '/'):
+            log_multitask_performance(
+                train_step_idx,
+                EpisodeBatch.concatenate(*adapted_episodes),
+                discount=args.discount,
+                name_map=None)
 
 
 class Snapshotter:
