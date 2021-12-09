@@ -56,7 +56,7 @@ def submit_job(algo, env, exp, time, n_cpus, mem, gpu=None, path="."):
 
         # use 4 cpus
         command += 'bsub -n ' + n_cpus
-        command += ' -J "' + algo + '-' + env + '-' + exp + ':' + str(list(params.values())) + '"'
+        command += ' -J "' + algo + '-' + env + '-' + exp + ':' + str(list(params.values())).replace("[", "").replace("]", "") + '"'
         # job time
         command += ' -W ' + time
         # memory per cpu
