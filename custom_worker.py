@@ -107,7 +107,7 @@ class CustomWorker(Worker):
             a = self.agent(torch.as_tensor(self._prev_obs,
                                            dtype=torch.float32,
                                            device=next(self.agent.parameters()).device))
-            np_action = a.squeeze().cpu().numpy()
+            np_action = a.squeeze().detach().cpu().numpy()
             np_action = np_action.clip(min=self.env.action_space.low, max=self.env.action_space.high)
             es = self.env.step(np_action)
             self._observations.append(self._prev_obs)

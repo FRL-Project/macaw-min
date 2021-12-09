@@ -226,7 +226,11 @@ def run(args):
         vf.load_state_dict(vf_state)
         vf_opt.load_state_dict(vf_opt_state)
 
-    evaluator = Evaluator()
+    evaluator = Evaluator(test_task_sampler=test_task_sampler,
+                          policy=policy,
+                          n_exploration_eps=10,
+                          n_test_tasks=args.n_test_tasks,
+                          episode_sampler=args.sampler)
 
     logger.log("Start training ...")
     logger.dump_all(step=0)
@@ -302,18 +306,14 @@ def run(args):
         if train_step_idx % args.epoch_interval == 0:
             # evaluation on test set
             logger.log("Start eval ...")
-            n_exploration_eps = 10
 
             evaluator.eval_model(args=args,
-                                 n_exploration_eps=n_exploration_eps,
                                  policy=policy,
                                  policy_lrs=policy_lrs,
                                  test_buffers=test_buffers,
-                                 test_task_sampler=test_task_sampler,
                                  train_step_idx=train_step_idx,
                                  vf=vf,
-                                 vf_lrs=vf_lrs,
-                                 n_test_tasks=args.n_test_tasks)
+                                 vf_lrs=vf_lrs)
 
             # log stats
             logger.log('Time %.2f s' % (time.time() - start_time))
@@ -345,8 +345,22 @@ class Evaluator:
 
     """
 
-    def __init__(self):
+    def __init__(self, test_task_sampler, policy, n_exploration_eps, n_test_tasks=None, episode_sampler="multi"):
+        self.test_task_sampler = test_task_sampler
+        self.n_exploration_eps = n_exploration_eps
+        self.nr_test_tasks = self.test_task_sampler.n_tasks if n_test_tasks is None else n_test_tasks
+
+        env_instances = self.test_task_sampler.sample(self.test_task_sampler.n_tasks)
+        env = env_instances[0]()
+
+        self.max_episode_length = env.spec.max_episode_length
+
         self.test_episode_sampler = None
+        self.test_episode_sampler = self.get_test_sampler(copy.deepcopy(policy),
+                                                          env,
+                                                          self.max_episode_length,
+                                                          self.n_exploration_eps,
+                                                          episode_sampler)
 
     def get_test_sampler(self, eval_policy, env, max_episode_length, n_exploration_eps, sampler='multi'):
 
@@ -373,28 +387,26 @@ class Evaluator:
 
         return self.test_episode_sampler
 
-    def eval_model(self, args, n_exploration_eps, policy, policy_lrs, test_buffers, test_task_sampler, train_step_idx, vf, vf_lrs,
-                   n_test_tasks=None):
+    def eval_model(self, args, policy, policy_lrs, test_buffers, train_step_idx, vf, vf_lrs):
 
-        nr_test_tasks = test_task_sampler.n_tasks if n_test_tasks is None else n_test_tasks
-
-        env_instances = test_task_sampler.sample(nr_test_tasks)
-        env = env_instances[0]()
-
-        max_episode_length = env.spec.max_episode_length
+        # copy the policy and value function
         eval_policy = copy.deepcopy(policy)
-
-        self.test_episode_sampler = self.get_test_sampler(eval_policy, env, max_episode_length, n_exploration_eps, args.sampler)
+        eval_value_function = copy.deepcopy(vf)
 
         # use tqdm to show progress
         # env_instances = tqdm(env_instances, file=sys.stdout)
 
         adapted_episodes = list()
 
+        env_instances = self.test_task_sampler.sample(self.nr_test_tasks)
         for env_instance in env_instances:
             # reset policy and value function
-            eval_policy = copy.deepcopy(policy)
-            eval_value_function = copy.deepcopy(vf)
+            eval_policy.load_state_dict(policy.state_dict())
+            eval_value_function.load_state_dict(vf.state_dict())
+
+            # set train mode
+            eval_policy.train()
+            eval_value_function.train()
 
             # offline update of value function and policy
             env_name = env_instance._task['inner'].env_name
@@ -404,6 +416,7 @@ class Evaluator:
             try:
                 test_buffer = test_buffers[env_name]
             except:
+                print("Skipping test task!!!")
                 continue
 
             value_batch_dict = test_buffer.sample(args.eval_batch_size, return_dict=True, device=args.device)
@@ -425,17 +438,16 @@ class Evaluator:
                     diff_policy_opt.step(loss)
 
                     # extract updated policy
-                    adapted_policy = eval_policy
-                    adapted_policy.load_state_dict(f_policy.state_dict())
-                    for variable in adapted_policy.parameters():
-                        variable.detach_()
+                    eval_policy.load_state_dict(f_policy.state_dict())
+
+                    del f_policy, f_value_function
 
             # obtain episodes on the current task instance
             with torch.no_grad():
-                adapted_policy.eval()
+                eval_policy.eval()
                 adapted_eps = self.test_episode_sampler.obtain_samples(0,
-                                                                       num_samples=max_episode_length * n_exploration_eps,
-                                                                       agent_update=adapted_policy,
+                                                                       num_samples=self.max_episode_length * self.n_exploration_eps,
+                                                                       agent_update=eval_policy,
                                                                        env_update=env_instance)
             # add adapted episodes
             adapted_episodes.append(adapted_eps)
@@ -447,6 +459,9 @@ class Evaluator:
                 EpisodeBatch.concatenate(*adapted_episodes),
                 discount=args.discount,
                 name_map=None)
+
+        del eval_policy
+        del eval_value_function
 
 
 class Snapshotter:
