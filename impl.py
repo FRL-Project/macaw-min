@@ -133,11 +133,11 @@ def get_opts_and_lrs(args, policy, vf):
     policy_opt = O.Adam(policy.parameters(), lr=args.outer_policy_lr)
     vf_opt = O.Adam(vf.parameters(), lr=args.outer_value_lr)
     policy_lrs = [
-        torch.nn.Parameter(torch.tensor(np.log(args.inner_policy_lr)).to(args.device))
+        torch.nn.Parameter(torch.tensor(np.log(args.inner_policy_lr, dtype=np.float32)).to(args.device))
         for p in policy.parameters()
     ]
     vf_lrs = [
-        torch.nn.Parameter(torch.tensor(np.log(args.inner_value_lr)).to(args.device))
+        torch.nn.Parameter(torch.tensor(np.log(args.inner_value_lr, dtype=np.float32)).to(args.device))
         for p in vf.parameters()
     ]
 
