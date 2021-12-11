@@ -1,4 +1,3 @@
-import argparse
 import copy
 import json
 import os
@@ -14,6 +13,7 @@ import hydra
 import metaworld
 import torch
 import torch.distributions as D
+import torch.nn.functional as F
 import torch.optim as O
 from dowel import tabular, logger
 from garage import log_multitask_performance, EpisodeBatch
@@ -25,12 +25,12 @@ from hydra.utils import get_original_cwd
 from torch import nn
 from tqdm import tqdm
 
+from custom_worker import CustomWorker
 from helpers import environmentvariables
 from losses import policy_loss_on_batch, vf_loss_on_batch
 from nn import MLP
 from utils import Experience
 from utils import ReplayBuffer
-from custom_worker import CustomWorker
 
 environmentvariables.initialize()
 
@@ -132,11 +132,11 @@ def get_opts_and_lrs(args, policy, vf):
     policy_opt = O.Adam(policy.parameters(), lr=args.outer_policy_lr)
     vf_opt = O.Adam(vf.parameters(), lr=args.outer_value_lr)
     policy_lrs = [
-        torch.nn.Parameter(torch.tensor(args.inner_policy_lr).to(args.device))
+        torch.nn.Parameter(torch.tensor(torch.log(args.inner_policy_lr)).to(args.device))
         for p in policy.parameters()
     ]
     vf_lrs = [
-        torch.nn.Parameter(torch.tensor(args.inner_value_lr).to(args.device))
+        torch.nn.Parameter(torch.tensor(torch.log(args.inner_value_lr)).to(args.device))
         for p in vf.parameters()
     ]
 
@@ -219,12 +219,17 @@ def run(args):
 
     # load a snapshot
     if args.snapshot_load:
-        start_itr, policy_state, policy_opt_state, vf_state, vf_opt_state = Snapshotter.load_snapshot(path=args.snapshot_path)
+        start_itr, policy_state, policy_opt_state, vf_state, vf_opt_state, policy_lrs, vf_lrs = \
+            Snapshotter.load_snapshot(path=args.snapshot_path)
         start_itr += 1  # start with the next iteration
         policy.load_state_dict(policy_state)
         policy_opt.load_state_dict(policy_opt_state)
         vf.load_state_dict(vf_state)
         vf_opt.load_state_dict(vf_opt_state)
+
+    # initialize learning rate optimizers
+    policy_lr_opt = O.Adam(policy_lrs, lr=args.lrlr)
+    vf_lr_opt = O.Adam(vf_lrs, lr=args.lrlr)
 
     evaluator = Evaluator(test_task_sampler=test_task_sampler,
                           policy=policy,
@@ -255,7 +260,7 @@ def run(args):
             # Adapt value function
             opt = O.SGD([{"params": p, "lr": None} for p in vf.parameters()])
             with higher.innerloop_ctx(
-                    vf, opt, override={"lr": vf_lrs}, copy_initial_weights=False
+                    vf, opt, override={"lr": [F.softplus(l) for l in vf_lrs]}, copy_initial_weights=False
             ) as (f_vf, diff_value_opt):
                 loss = vf_loss_on_batch(f_vf, inner_batch, inner=True)
                 diff_value_opt.step(loss)
@@ -268,7 +273,7 @@ def run(args):
             adapted_vf = f_vf
             opt = O.SGD([{"params": p, "lr": None} for p in policy.parameters()])
             with higher.innerloop_ctx(
-                    policy, opt, override={"lr": policy_lrs}, copy_initial_weights=False
+                    policy, opt, override={"lr": [F.softplus(l) for l in policy_lrs]}, copy_initial_weights=False
             ) as (f_policy, diff_policy_opt):
                 loss = policy_loss_on_batch(
                     f_policy,
@@ -300,8 +305,12 @@ def run(args):
         # Meta update the policy
         policy_grad = update_model(policy, policy_opt, clip=1e9)
 
-        # vf_lrs_opt.step()
-        # vf_lrs_opt.zero_grad()
+        if args.lrlr > 0:
+            # optimize the inner learning rates
+            policy_lr_opt.step()
+            policy_lr_opt.zero_grad()
+            vf_lr_opt.step()
+            vf_lr_opt.zero_grad()
 
         if train_step_idx % args.epoch_interval == 0:
             # evaluation on test set
@@ -327,7 +336,7 @@ def run(args):
 
             if train_step_idx % (args.epoch_interval * 10) == 0:
                 # save checkpoint
-                Snapshotter.save_snapshot(args.log_dir, train_step_idx, policy, policy_opt, vf, vf_opt)
+                Snapshotter.save_snapshot(args.log_dir, train_step_idx, policy, policy_opt, vf, vf_opt, policy_lrs, vf_lrs)
 
 
 def setup_logger(log_dir):
@@ -423,7 +432,8 @@ class Evaluator:
             policy_batch_dict = value_batch_dict
 
             opt = O.SGD([{'params': p, 'lr': None} for p in eval_value_function.adaptation_parameters()])
-            with higher.innerloop_ctx(eval_value_function, opt, override={'lr': vf_lrs}) as (f_value_function, diff_value_opt):
+            with higher.innerloop_ctx(eval_value_function, opt, override={'lr': [F.softplus(l) for l in vf_lrs]}) as (
+                    f_value_function, diff_value_opt):
                 loss = vf_loss_on_batch(f_value_function, value_batch_dict, inner=True)
                 diff_value_opt.step(loss)
 
@@ -431,7 +441,8 @@ class Evaluator:
                 # self.soft_update(f_value_function, vf_target) TODO use this soft update?
 
                 policy_opt = O.SGD([{'params': p, 'lr': None} for p in eval_policy.adaptation_parameters()])
-                with higher.innerloop_ctx(eval_policy, policy_opt, override={'lr': policy_lrs}) as (f_policy, diff_policy_opt):
+                with higher.innerloop_ctx(eval_policy, policy_opt, override={'lr': [F.softplus(l) for l in policy_lrs]}) as (
+                        f_policy, diff_policy_opt):
                     loss = policy_loss_on_batch(f_policy, f_value_function, policy_batch_dict,
                                                 adv_coef=args.advantage_head_coef,
                                                 inner=True)
@@ -488,10 +499,12 @@ class Snapshotter:
                snapshot['policy_state_dict'], \
                snapshot['policy_optimizer_state_dict'], \
                snapshot['value_function_state_dict'], \
-               snapshot['value_function_optimizer_state_dict'],
+               snapshot['value_function_optimizer_state_dict'], \
+               snapshot['policy_lrs'], \
+               snapshot['vf_lrs']
 
     @staticmethod
-    def save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt):
+    def save_snapshot(log_dir, train_step_idx, policy, policy_opt, vf, vf_opt, policy_lrs, vf_lrs):
         file_name = Snapshotter.get_file_name(train_step_idx)
 
         logger.log(f"Saving snapshot {file_name}")
@@ -502,6 +515,8 @@ class Snapshotter:
             'policy_optimizer_state_dict': policy_opt.state_dict(),
             'value_function_state_dict': vf.state_dict(),
             'value_function_optimizer_state_dict': vf_opt.state_dict(),
+            'policy_lrs': policy_lrs,
+            'vf_lrs': vf_lrs
         }, os.path.join(log_dir, file_name))
 
     @staticmethod
