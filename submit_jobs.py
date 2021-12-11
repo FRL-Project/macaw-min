@@ -40,8 +40,8 @@ def product_dict(**kwargs):
 @click.option('--env', default="ml10")
 @click.option('--exp', default="outer_lr")
 @click.option('--time', default="120:00")
-@click.option('--n_cpus', default="20")
-@click.option('--mem', default="3072")
+@click.option('--n_cpus', default="10")
+@click.option('--mem', default="6144")
 @click.option('--gpu', default=None)
 def submit_job(algo, env, exp, time, n_cpus, mem, gpu=None, path="."):
     task_config_path = os.path.join("task_config/", task_config_file[env])
