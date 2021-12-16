@@ -157,10 +157,14 @@ def get_metaworld_env(env_name: str = 'ml10', env_ml1_name: str = ''):
     train_sampler = MetaWorldTaskSampler(ml, 'train')
     env_specs = train_sampler.sample(len(ml.train_classes))[0]()  # sample one task instance to get environment specs
 
+    env = MetaWorldSetTaskEnv(ml, 'test')
     test_sampler = SetTaskSampler(
         MetaWorldSetTaskEnv,
-        env=MetaWorldSetTaskEnv(ml, 'test'),
+        env=env,
     )
+
+    print("Train tasks:", train_sampler._task_map.keys())
+    print("Test tasks:", env._env_list)
 
     return env_specs, train_sampler, test_sampler
 
